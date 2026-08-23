@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import { useSession, signIn, signOut } from "next-auth/react";
-import { getUserPlaylists, getPlaylistTracks, getDevices, playTrack, pausePlayback } from "@/lib/spotify";
+import { getUserPlaylists, getPlaylistTracks, getDevices, playTrack, pausePlayback, resumePlayback } from "@/lib/spotify";
 
 const MOCK_TRACKS = [
   {title:"Long Way Around", artist:"Nala Fontaine", album:"Slow Static", year:1978, dur:243, cover:"linear-gradient(140deg,#ff9d3c 0%,#ff3d6e 45%,#7b1a5c 100%)"},
@@ -42,10 +42,16 @@ export default function VinylPlayer({ accent = "#ff3d6e" }) {
   
   const [loading, setLoading] = useState(true);
 
+  // Live mirror of whatever is playing on the Spotify account.
+  const [nowPlaying, setNowPlaying] = useState<any>(null);
+  const [nowPlayingError, setNowPlayingError] = useState<string | null>(null);
+
   // Load Spotify Data
   useEffect(() => {
     async function loadSpotifyData() {
       if (token) {
+        // Devices and playlists are loaded independently so a failure in one
+        // (e.g. no active device) doesn't prevent the other from loading.
         try {
           const devs = await getDevices(token);
           if (devs && devs.devices && devs.devices.length > 0) {
@@ -55,28 +61,34 @@ export default function VinylPlayer({ accent = "#ff3d6e" }) {
               kind: d.type
             })));
           }
-          
+        } catch (e) {
+          console.error("Error loading devices", e);
+        }
+
+        try {
           const pl = await getUserPlaylists(token);
           if (pl && pl.items && pl.items.length > 0) {
             setPlaylistName(pl.items[0].name);
             const trksData = await getPlaylistTracks(pl.items[0].id, token);
             if (trksData && trksData.items) {
-              const mappedTracks = trksData.items.map((item: any) => ({
-                id: item.track.id,
-                uri: item.track.uri,
-                title: item.track.name,
-                artist: item.track.artists.map((a: any) => a.name).join(", "),
-                album: item.track.album.name,
-                year: item.track.album.release_date.substring(0, 4),
-                dur: Math.floor(item.track.duration_ms / 1000),
-                cover: item.track.album.images[0] ? `url(${item.track.album.images[0].url})` : "linear-gradient(140deg,#ff9d3c 0%,#ff3d6e 45%,#7b1a5c 100%)",
-                rawCover: item.track.album.images[0] ? item.track.album.images[0].url : ""
-              }));
-              setTracks(mappedTracks);
+              const mappedTracks = trksData.items
+                .filter((item: any) => item.track)
+                .map((item: any) => ({
+                  id: item.track.id,
+                  uri: item.track.uri,
+                  title: item.track.name,
+                  artist: item.track.artists.map((a: any) => a.name).join(", "),
+                  album: item.track.album.name,
+                  year: (item.track.album.release_date ?? "").substring(0, 4),
+                  dur: Math.floor(item.track.duration_ms / 1000),
+                  cover: item.track.album.images[0] ? `url(${item.track.album.images[0].url})` : "linear-gradient(140deg,#ff9d3c 0%,#ff3d6e 45%,#7b1a5c 100%)",
+                  rawCover: item.track.album.images[0] ? item.track.album.images[0].url : ""
+                }));
+              if (mappedTracks.length > 0) setTracks(mappedTracks);
             }
           }
         } catch (e) {
-          console.error("Error loading spotify", e);
+          console.error("Error loading playlists", e);
         }
       }
       setLoading(false);
@@ -84,12 +96,59 @@ export default function VinylPlayer({ accent = "#ff3d6e" }) {
     loadSpotifyData();
   }, [token]);
 
+  // Poll Spotify for the currently playing track and mirror it.
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+
+    async function pull() {
+      try {
+        const res = await fetch("/api/now-playing", { cache: "no-store" });
+        if (cancelled) return;
+
+        if (!res.ok) {
+          setNowPlayingError(res.status === 401 ? "Session expired - sign in again" : "Could not reach Spotify");
+          return;
+        }
+
+        const data = await res.json();
+        if (cancelled) return;
+
+        setNowPlayingError(null);
+        if (data.track) {
+          setNowPlaying(data);
+          setPlaying(Boolean(data.isPlaying));
+          setT(Math.floor((data.progressMs ?? 0) / 1000));
+        } else {
+          setNowPlaying(null);
+          setPlaying(false);
+        }
+      } catch {
+        if (!cancelled) setNowPlayingError("Could not reach Spotify");
+      }
+    }
+
+    pull();
+    const id = setInterval(pull, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [session]);
+
   // Sync Timer
   useEffect(() => {
     let timer: NodeJS.Timeout;
     if (playing) {
       timer = setInterval(() => {
         setT((prevT) => {
+          // When mirroring a live track, just tick smoothly between polls -
+          // the 5s poll is the source of truth for track changes.
+          const liveDur = nowPlaying?.track
+            ? Math.floor(nowPlaying.track.durationMs / 1000)
+            : null;
+          if (liveDur) return Math.min(prevT + 1, liveDur);
+
           if (!tracks || tracks.length === 0) return 0;
           const d = tracks[i].dur;
           if (prevT + 1 >= d) {
@@ -102,7 +161,7 @@ export default function VinylPlayer({ accent = "#ff3d6e" }) {
       }, 1000);
     }
     return () => clearInterval(timer);
-  }, [playing, i, repeat, tracks]);
+  }, [playing, i, repeat, tracks, nowPlaying]);
   
   // Sync Spotify Playback
   const handlePlayToggle = async () => {
@@ -110,14 +169,21 @@ export default function VinylPlayer({ accent = "#ff3d6e" }) {
     setPlaying(isNowPlaying);
     
     if (token) {
-      if (isNowPlaying && tracks[i]?.uri) {
-        try {
-          await playTrack([tracks[i].uri], token, devices[device]?.id);
-        } catch(e) { console.error("Playback error", e); }
-      } else {
-        try {
+      const mirroringLive = Boolean(nowPlaying?.track);
+      try {
+        if (isNowPlaying) {
+          if (mirroringLive) {
+            // A live track is on screen - resume it, don't start a crate track.
+            await resumePlayback(token, devices[device]?.id);
+          } else if (tracks[i]?.uri) {
+            await playTrack([tracks[i].uri], token, devices[device]?.id);
+          }
+        } else {
           await pausePlayback(token, devices[device]?.id);
-        } catch(e) { console.error("Playback error", e); }
+        }
+      } catch (e) {
+        console.error("Playback error", e);
+        setNowPlayingError("Playback failed - is Spotify Premium active on a device?");
       }
     }
   };
@@ -148,9 +214,23 @@ export default function VinylPlayer({ accent = "#ff3d6e" }) {
     return <div style={{ height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#170a24", color: "#fff" }}>Loading...</div>;
   }
 
-  const tr = tracks[i] || MOCK_TRACKS[0];
+  // A live track from Spotify wins over the local crate selection.
+  const liveTrack = nowPlaying?.track
+    ? {
+        title: nowPlaying.track.title,
+        artist: nowPlaying.track.artist,
+        album: nowPlaying.track.album,
+        year: nowPlaying.track.year,
+        dur: Math.max(1, Math.floor(nowPlaying.track.durationMs / 1000)),
+        cover: nowPlaying.track.image
+          ? `url(${nowPlaying.track.image})`
+          : "linear-gradient(140deg,#ff9d3c 0%,#ff3d6e 45%,#7b1a5c 100%)",
+      }
+    : null;
+
+  const tr = liveTrack || tracks[i] || MOCK_TRACKS[0];
   const isLiked = !!liked[i];
-  const pct = (t / tr.dur) * 100;
+  const pct = tr.dur > 0 ? Math.min(100, (t / tr.dur) * 100) : 0;
   const upcoming = [];
   for (let k = 1; k <= tracks.length - 1; k++) {
     upcoming.push({ idx: (i + k) % tracks.length, n: k });
@@ -166,6 +246,22 @@ export default function VinylPlayer({ accent = "#ff3d6e" }) {
   const prev = () => {
     playSpecificTrack(t > 3 ? i : (i - 1 + tracks.length) % tracks.length);
   };
+
+  const statusLabel = !session
+    ? "Not connected"
+    : nowPlayingError
+    ? nowPlayingError
+    : liveTrack
+    ? nowPlaying?.isPlaying
+      ? "Now spinning"
+      : "Paused on Spotify"
+    : "Nothing playing";
+
+  const statusColor = !session || nowPlayingError
+    ? "#ff3d6e"
+    : liveTrack && nowPlaying?.isPlaying
+    ? "#3de0c8"
+    : "#ffc53d";
 
   return (
     <div
@@ -191,13 +287,13 @@ export default function VinylPlayer({ accent = "#ff3d6e" }) {
                 width: "9px",
                 height: "9px",
                 borderRadius: "50%",
-                background: "#3de0c8",
-                boxShadow: "0 0 14px #3de0c8",
+                background: statusColor,
+                boxShadow: `0 0 14px ${statusColor}`,
                 animation: "glowpulse 2s ease-in-out infinite",
               }}
             ></div>
             <span style={{ fontSize: "11px", letterSpacing: ".24em", textTransform: "uppercase", color: "rgba(255,244,236,.62)" }}>
-              Now spinning
+              {statusLabel}
             </span>
           </div>
           <div style={{ position: "relative" }}>

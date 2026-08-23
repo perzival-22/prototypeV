@@ -12,7 +12,20 @@ export async function fetchWebApi(endpoint: string, method: string, body?: any, 
   if (res.status === 401) {
     throw new Error("Token expired or invalid");
   }
-  
+
+  // Surface real failures instead of returning Spotify's error body as if it
+  // were data. A common one: 403 on me/player/* for non-Premium accounts.
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const err = await res.json();
+      detail = err?.error?.message ? `: ${err.error.message}` : "";
+    } catch {
+      /* body was not JSON */
+    }
+    throw new Error(`Spotify API ${res.status}${detail}`);
+  }
+
   return await res.json();
 }
 
@@ -31,6 +44,12 @@ export async function playTrack(uris: string[], token: string, deviceId?: string
 
 export async function pausePlayback(token: string, deviceId?: string) {
   const endpoint = deviceId ? `me/player/pause?device_id=${deviceId}` : "me/player/pause";
+  return fetchWebApi(endpoint, "PUT", undefined, token);
+}
+
+// Resume whatever is already loaded on the device (no uris = keep current track).
+export async function resumePlayback(token: string, deviceId?: string) {
+  const endpoint = deviceId ? `me/player/play?device_id=${deviceId}` : "me/player/play";
   return fetchWebApi(endpoint, "PUT", undefined, token);
 }
 
