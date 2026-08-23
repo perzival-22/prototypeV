@@ -4,20 +4,17 @@ import React, { useState, useEffect, useRef } from "react";
 import { useSession, signIn, signOut } from "next-auth/react";
 import { getUserPlaylists, getPlaylistTracks, getDevices, playTrack, pausePlayback, resumePlayback } from "@/lib/spotify";
 
-const MOCK_TRACKS = [
-  {title:"Long Way Around", artist:"Nala Fontaine", album:"Slow Static", year:1978, dur:243, cover:"linear-gradient(140deg,#ff9d3c 0%,#ff3d6e 45%,#7b1a5c 100%)"},
-  {title:"Blue Hour Drive", artist:"The Meridian Set", album:"Nightpost", year:1982, dur:198, cover:"linear-gradient(150deg,#4ea8ff 0%,#4b3ce0 52%,#1a1060 100%)"},
-  {title:"Paper Moon Radio", artist:"Odile Marsh", album:"Paper Moon Radio", year:1974, dur:276, cover:"linear-gradient(160deg,#ffe14d 0%,#ff8a3c 48%,#b02a5c 100%)"},
-  {title:"Kept in Amber", artist:"Sunroom Quartet", album:"Kept in Amber", year:1991, dur:221, cover:"linear-gradient(135deg,#7dffc4 0%,#12c9a6 46%,#0a5f74 100%)"},
-  {title:"Velvet Ledger", artist:"Cass Orme", album:"Second House", year:1986, dur:255, cover:"linear-gradient(145deg,#ff6ee7 0%,#7b5bff 52%,#2a1170 100%)"},
-  {title:"After the Encore", artist:"Nala Fontaine", album:"Slow Static", year:1978, dur:189, cover:"linear-gradient(150deg,#fff2d6 0%,#ffb03c 45%,#c2385a 100%)"}
-];
-
-const FALLBACK_DEVICES = [
-  {name:"Living Room", kind:"Speaker"},
-  {name:"Studio Monitors", kind:"Desktop"},
-  {name:"iPhone", kind:"Phone"}
-];
+// Shown when nothing is playing and no playlist has loaded yet - no template
+// songs, just a neutral placeholder so the visualizer still has something to
+// render.
+const PLACEHOLDER = {
+  title: "Nothing playing",
+  artist: "Play something on Spotify",
+  album: "",
+  year: "",
+  dur: 1,
+  cover: "linear-gradient(165deg,#241040 0%,#170a24 55%,#0e0616 100%)",
+};
 
 export default function VinylPlayer({ accent = "#ff3d6e" }) {
   const { data: session } = useSession();
@@ -25,9 +22,9 @@ export default function VinylPlayer({ accent = "#ff3d6e" }) {
   // @ts-ignore
   const token = session?.user?.accessToken;
 
-  const [tracks, setTracks] = useState<any[]>(MOCK_TRACKS);
-  const [devices, setDevices] = useState<any[]>(FALLBACK_DEVICES);
-  const [playlistName, setPlaylistName] = useState("Sunday Crate");
+  const [tracks, setTracks] = useState<any[]>([]);
+  const [devices, setDevices] = useState<any[]>([]);
+  const [playlistName, setPlaylistName] = useState("Your crate");
 
   const [i, setI] = useState(0);
   const [t, setT] = useState(0);
@@ -36,7 +33,7 @@ export default function VinylPlayer({ accent = "#ff3d6e" }) {
   const [shuffle, setShuffle] = useState(false);
   const [repeat, setRepeat] = useState(0);
   const [liked, setLiked] = useState<Record<number, boolean>>({});
-  const [tab, setTab] = useState("crate");
+  const [menuOpen, setMenuOpen] = useState(false);
   const [devicesOpen, setDevicesOpen] = useState(false);
   const [device, setDevice] = useState(0);
   
@@ -243,7 +240,7 @@ export default function VinylPlayer({ accent = "#ff3d6e" }) {
       }
     : null;
 
-  const tr = liveTrack || tracks[i] || MOCK_TRACKS[0];
+  const tr = liveTrack || tracks[i] || PLACEHOLDER;
   const isLiked = !!liked[i];
   const pct = tr.dur > 0 ? Math.min(100, (t / tr.dur) * 100) : 0;
   const upcoming = [];
@@ -255,10 +252,12 @@ export default function VinylPlayer({ accent = "#ff3d6e" }) {
   const armAccent = playing ? "#3de0c8" : "rgba(255,244,236,.35)";
 
   const next = () => {
+    if (tracks.length === 0) return;
     playSpecificTrack(shuffle ? Math.floor(Math.random() * tracks.length) : (i + 1) % tracks.length);
   };
 
   const prev = () => {
+    if (tracks.length === 0) return;
     playSpecificTrack(t > 3 ? i : (i - 1 + tracks.length) % tracks.length);
   };
 
@@ -281,18 +280,43 @@ export default function VinylPlayer({ accent = "#ff3d6e" }) {
   return (
     <div
       style={{
+        position: "relative",
         height: "100vh",
         width: "100vw",
         display: "flex",
+        overflow: "hidden",
         fontFamily: "var(--font-space-grotesk), system-ui, sans-serif",
         color: "#fff4ec",
-        background: `radial-gradient(900px 700px at 18% 12%, rgba(255,61,110,.30), transparent 60%),
-                     radial-gradient(900px 700px at 82% 20%, rgba(123,91,255,.32), transparent 62%),
-                     radial-gradient(1000px 800px at 55% 108%, rgba(61,224,200,.22), transparent 60%),
-                     linear-gradient(165deg,#241040 0%,#170a24 55%,#0e0616 100%)`,
+        background: "#0e0616",
       }}
     >
-      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", padding: "26px 40px 34px" }}>
+      {/* Ambient background - a blurred, oversized copy of the album cover so the
+          whole screen mirrors the artwork of the current track. */}
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          zIndex: 0,
+          backgroundImage: tr.cover,
+          backgroundSize: "cover",
+          backgroundPosition: "center",
+          filter: "blur(72px) saturate(1.3)",
+          transform: "scale(1.25)",
+          opacity: 0.55,
+          transition: "opacity .6s ease",
+        }}
+      ></div>
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          zIndex: 0,
+          background:
+            "radial-gradient(1200px 900px at 50% 0%, rgba(0,0,0,0) 30%, rgba(14,6,22,.55) 100%), linear-gradient(165deg, rgba(23,10,36,.55) 0%, rgba(14,6,22,.82) 100%)",
+        }}
+      ></div>
+
+      <div style={{ position: "relative", zIndex: 1, flex: 1, minWidth: 0, display: "flex", flexDirection: "column", padding: "26px 40px 34px" }}>
         
         {/* Top Header */}
         <div style={{ flex: "none", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "16px" }}>
@@ -311,7 +335,32 @@ export default function VinylPlayer({ accent = "#ff3d6e" }) {
               {statusLabel}
             </span>
           </div>
-          <div style={{ position: "relative" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            {session && (
+              <button
+                onClick={() => setMenuOpen(true)}
+                title="Up next"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: "42px",
+                  height: "42px",
+                  background: "rgba(255,255,255,.09)",
+                  border: "1px solid rgba(255,244,236,.18)",
+                  color: "#fff4ec",
+                  borderRadius: "12px",
+                  cursor: "pointer",
+                }}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+                  <path d="M4 6h16"></path>
+                  <path d="M4 12h16"></path>
+                  <path d="M4 18h16"></path>
+                </svg>
+              </button>
+            )}
+            <div style={{ position: "relative" }}>
             {!session ? (
               <button
                 onClick={() => signIn("spotify")}
@@ -403,6 +452,7 @@ export default function VinylPlayer({ accent = "#ff3d6e" }) {
                 ))}
               </div>
             )}
+            </div>
           </div>
         </div>
 
@@ -415,7 +465,7 @@ export default function VinylPlayer({ accent = "#ff3d6e" }) {
                   position: "absolute",
                   inset: "-9%",
                   borderRadius: "50%",
-                  background: tr.cover,
+                  backgroundImage: tr.cover,
                   backgroundSize: "cover",
                   backgroundPosition: "center",
                   filter: "blur(46px)",
@@ -429,41 +479,73 @@ export default function VinylPlayer({ accent = "#ff3d6e" }) {
                   inset: 0,
                   borderRadius: "50%",
                   overflow: "hidden",
-                  boxShadow: "0 40px 90px rgba(0,0,0,.65), inset 0 0 70px rgba(0,0,0,.85)",
+                  boxShadow: "0 40px 90px rgba(0,0,0,.65), inset 0 0 70px rgba(0,0,0,.55)",
                   animation: `spin 4.5s linear infinite`,
                   animationPlayState: playing ? "running" : "paused",
-                  background: `repeating-radial-gradient(circle at 50% 50%, rgba(255,255,255,.07) 0 1px, rgba(0,0,0,0) 1px 5px),
-                               radial-gradient(circle at 34% 26%, #3d2f4a 0%, #170f1e 46%, #08050b 100%)`,
+                  // The disc face IS the album artwork - shown full and clear.
+                  backgroundImage: tr.cover,
+                  backgroundSize: "cover",
+                  backgroundPosition: "center",
                 }}
               >
+                {/* Vinyl grooves layered over the artwork so it still reads as a record. */}
                 <div
                   style={{
                     position: "absolute",
                     inset: 0,
                     borderRadius: "50%",
-                    background: `conic-gradient(from 0deg, rgba(255,61,110,.30), rgba(255,197,61,.12) 18%, rgba(255,255,255,0) 34%, rgba(61,224,200,.26) 52%, rgba(255,255,255,0) 70%, rgba(123,91,255,.32) 88%, rgba(255,61,110,.30))`,
-                    mixBlendMode: "screen",
+                    background: "repeating-radial-gradient(circle at 50% 50%, rgba(0,0,0,.22) 0 1px, rgba(0,0,0,0) 1px 5px)",
+                    mixBlendMode: "overlay",
+                    opacity: 0.55,
                   }}
                 ></div>
+                {/* Sheen sweep. */}
+                <div
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    borderRadius: "50%",
+                    background: `conic-gradient(from 0deg, rgba(255,255,255,.18), rgba(255,255,255,0) 20%, rgba(255,255,255,0) 55%, rgba(255,255,255,.16) 72%, rgba(255,255,255,0) 88%)`,
+                    mixBlendMode: "screen",
+                    opacity: 0.6,
+                  }}
+                ></div>
+                {/* Edge vignette. */}
+                <div
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    borderRadius: "50%",
+                    background: "radial-gradient(circle at 50% 50%, rgba(0,0,0,0) 52%, rgba(0,0,0,.45) 100%)",
+                  }}
+                ></div>
+                {/* Faint label ring. */}
                 <div
                   style={{
                     position: "absolute",
                     left: "50%",
                     top: "50%",
-                    width: "40%",
-                    height: "40%",
+                    width: "30%",
+                    height: "30%",
                     transform: "translate(-50%,-50%)",
                     borderRadius: "50%",
-                    overflow: "hidden",
-                    boxShadow: "0 0 0 2px rgba(0,0,0,.55), 0 8px 26px rgba(0,0,0,.6)",
-                    background: tr.cover,
-                    backgroundSize: "cover",
-                    backgroundPosition: "center",
+                    boxShadow: "0 0 0 1px rgba(0,0,0,.35), inset 0 0 0 6px rgba(0,0,0,.18)",
                   }}
-                >
-                  <div style={{ position: "absolute", inset: 0, background: "radial-gradient(circle at 28% 22%, rgba(255,255,255,.3), transparent 55%)" }}></div>
-                  <div style={{ position: "absolute", left: "50%", top: "50%", width: "10%", height: "10%", transform: "translate(-50%,-50%)", borderRadius: "50%", background: "#0d0812", boxShadow: "inset 0 0 8px rgba(0,0,0,.95),0 0 0 3px rgba(255,255,255,.08)" }}></div>
-                </div>
+                ></div>
+                {/* Spindle hole. */}
+                <div
+                  style={{
+                    position: "absolute",
+                    left: "50%",
+                    top: "50%",
+                    width: "9%",
+                    height: "9%",
+                    transform: "translate(-50%,-50%)",
+                    borderRadius: "50%",
+                    background: "#0d0812",
+                    boxShadow: "inset 0 0 8px rgba(0,0,0,.95), 0 0 0 3px rgba(255,255,255,.10), 0 0 0 11px rgba(0,0,0,.22)",
+                  }}
+                ></div>
               </div>
             </div>
 
@@ -543,63 +625,87 @@ export default function VinylPlayer({ accent = "#ff3d6e" }) {
         </div>
       </div>
 
-      {/* Side Panel */}
-      <div style={{ width: "min(380px,32%)", minWidth: "288px", flex: "none", borderLeft: "1px solid rgba(255,244,236,.12)", background: "rgba(14,6,22,.5)", display: "flex", flexDirection: "column", padding: "26px 24px 24px", backdropFilter: "blur(8px)" }}>
-        <div style={{ flex: "none", display: "flex", gap: "6px", padding: "4px", background: "rgba(255,255,255,.07)", borderRadius: "999px", marginBottom: "20px" }}>
-          <button onClick={() => setTab("crate")} style={{ flex: 1, border: 0, cursor: "pointer", fontFamily: "inherit", fontSize: "11.5px", letterSpacing: ".12em", textTransform: "uppercase", padding: "10px", borderRadius: "999px", background: tab === "crate" ? "#fff4ec" : "transparent", color: tab === "crate" ? "#1c0b16" : "rgba(255,244,236,.65)" }}>Crate</button>
-          <button onClick={() => setTab("queue")} style={{ flex: 1, border: 0, cursor: "pointer", fontFamily: "inherit", fontSize: "11.5px", letterSpacing: ".12em", textTransform: "uppercase", padding: "10px", borderRadius: "999px", background: tab === "queue" ? "#fff4ec" : "transparent", color: tab === "queue" ? "#1c0b16" : "rgba(255,244,236,.65)" }}>Up next</button>
-        </div>
-
-        {tab === "crate" && (
-          <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-            <div style={{ flex: "none", display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: "12px" }}>
+      {/* Up-next drawer - slides in from the right when the burger is tapped. */}
+      {session && (
+        <>
+          <div
+            onClick={() => setMenuOpen(false)}
+            style={{
+              position: "absolute",
+              inset: 0,
+              zIndex: 50,
+              background: "rgba(0,0,0,.5)",
+              opacity: menuOpen ? 1 : 0,
+              pointerEvents: menuOpen ? "auto" : "none",
+              transition: "opacity .25s ease",
+            }}
+          ></div>
+          <div
+            style={{
+              position: "absolute",
+              top: 0,
+              right: 0,
+              height: "100%",
+              width: "min(380px,86%)",
+              zIndex: 51,
+              display: "flex",
+              flexDirection: "column",
+              padding: "24px 22px",
+              background: "rgba(14,6,22,.92)",
+              borderLeft: "1px solid rgba(255,244,236,.14)",
+              backdropFilter: "blur(16px)",
+              boxShadow: "-24px 0 60px rgba(0,0,0,.5)",
+              transform: menuOpen ? "translateX(0)" : "translateX(100%)",
+              transition: "transform .3s cubic-bezier(.4,.05,.2,1)",
+            }}
+          >
+            <div style={{ flex: "none", display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px" }}>
+              <span style={{ fontSize: "11px", letterSpacing: ".24em", textTransform: "uppercase", color: "rgba(255,244,236,.6)" }}>Up next</span>
+              <button
+                onClick={() => setMenuOpen(false)}
+                title="Close"
+                style={{ background: "transparent", border: 0, color: "#fff4ec", cursor: "pointer", padding: "4px", lineHeight: 0 }}
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M6 6l12 12"></path><path d="M18 6 6 18"></path></svg>
+              </button>
+            </div>
+            <div style={{ flex: "none", display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: "16px" }}>
               <span style={{ fontFamily: "var(--font-instrument-serif), Georgia, serif", fontSize: "23px" }}>{playlistName}</span>
-              <span style={{ fontSize: "11px", color: "rgba(255,244,236,.5)" }}>{tracks.length} records</span>
+              <span style={{ fontSize: "11px", color: "rgba(255,244,236,.5)" }}>{tracks.length} tracks</span>
             </div>
-            <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden", padding: "10px 4px 40px" }}>
-              {tracks.map((s, k) => {
-                const isActive = k === i;
-                const shift = isActive ? 0 : -14 + (k % 2) * 5;
-                const rot = isActive ? 0 : (k % 2 ? -1.2 : 1.2);
-                return (
-                  <div key={k} onClick={() => playSpecificTrack(k)} style={{ position: "relative", cursor: "pointer", marginTop: k === 0 ? "0px" : "-16px", transform: `translateX(${shift}px) rotate(${rot}deg)`, transition: "transform .28s cubic-bezier(.2,.8,.3,1)" }}>
-                    <div style={{ display: "flex", gap: "14px", alignItems: "center", padding: "11px 12px 28px", borderRadius: "6px", background: "linear-gradient(155deg,rgba(255,255,255,.11),rgba(255,255,255,.03))", border: `1px solid ${isActive ? accent : "rgba(255,244,236,.12)"}`, boxShadow: "0 14px 30px rgba(0,0,0,.5)", opacity: isActive ? 1 : 0.82 }}>
-                      <div style={{ position: "relative", flex: "none", width: "64px", height: "64px", borderRadius: "3px", background: s.cover, backgroundSize: "cover", backgroundPosition: "center", boxShadow: "0 4px 14px rgba(0,0,0,.4)" }}>
-                        <div style={{ position: "absolute", right: "-12px", top: "50%", width: "54px", height: "54px", transform: "translateY(-50%)", borderRadius: "50%", background: "radial-gradient(circle,#3a3145 0 20%,#120c18 21%)", boxShadow: "0 4px 10px rgba(0,0,0,.5)", opacity: isActive ? 1 : 0.45 }}></div>
-                        <div style={{ position: "absolute", inset: 0, background: "linear-gradient(105deg,rgba(255,255,255,.22),transparent 46%)" }}></div>
-                      </div>
-                      <div style={{ minWidth: 0, flex: 1, display: "flex", flexDirection: "column", gap: "2px" }}>
-                        <span style={{ fontSize: "14.5px", fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: isActive ? accent : "#fff4ec" }}>{s.title}</span>
-                        <span style={{ fontSize: "12.5px", color: "rgba(255,244,236,.58)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{s.artist}</span>
-                        <span style={{ fontSize: "10.5px", letterSpacing: ".1em", textTransform: "uppercase", color: "rgba(255,244,236,.38)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{s.album} · {fmt(s.dur)}</span>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
 
-        {tab === "queue" && (
-          <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
-            {upcoming.map((u, idx) => {
-              const q = tracks[u.idx];
-              return (
-                <div key={idx} onClick={() => playSpecificTrack(u.idx)} style={{ display: "flex", alignItems: "center", gap: "13px", padding: "10px", borderRadius: "10px", cursor: "pointer" }}>
-                  <span style={{ width: "20px", fontSize: "12px", fontVariantNumeric: "tabular-nums", color: "rgba(255,244,236,.4)" }}>{u.n}</span>
-                  <div style={{ width: "40px", height: "40px", flex: "none", borderRadius: "4px", background: q.cover, backgroundSize: "cover", backgroundPosition: "center" }}></div>
-                  <div style={{ minWidth: 0, flex: 1, display: "flex", flexDirection: "column" }}>
-                    <span style={{ fontSize: "13.5px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{q.title}</span>
-                    <span style={{ fontSize: "12px", color: "rgba(255,244,236,.55)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{q.artist}</span>
-                  </div>
-                  <span style={{ fontSize: "11.5px", fontVariantNumeric: "tabular-nums", color: "rgba(255,244,236,.45)" }}>{fmt(q.dur)}</span>
+            <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden" }}>
+              {upcoming.length === 0 ? (
+                <div style={{ fontSize: "13px", color: "rgba(255,244,236,.5)", padding: "20px 4px", lineHeight: 1.5 }}>
+                  Nothing queued yet. Load a playlist or play a track and the rest of the queue shows up here.
                 </div>
-              );
-            })}
+              ) : (
+                upcoming.map((u, idx) => {
+                  const q = tracks[u.idx];
+                  return (
+                    <div
+                      key={idx}
+                      onClick={() => {
+                        playSpecificTrack(u.idx);
+                        setMenuOpen(false);
+                      }}
+                      style={{ display: "flex", alignItems: "center", gap: "13px", padding: "10px", borderRadius: "10px", cursor: "pointer" }}
+                    >
+                      <span style={{ width: "20px", fontSize: "12px", fontVariantNumeric: "tabular-nums", color: "rgba(255,244,236,.4)" }}>{u.n}</span>
+                      <div style={{ width: "40px", height: "40px", flex: "none", borderRadius: "4px", backgroundImage: q.cover, backgroundSize: "cover", backgroundPosition: "center" }}></div>
+                      <div style={{ minWidth: 0, flex: 1, display: "flex", flexDirection: "column" }}>
+                        <span style={{ fontSize: "13.5px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{q.title}</span>
+                        <span style={{ fontSize: "12px", color: "rgba(255,244,236,.55)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{q.artist}</span>
+                      </div>
+                      <span style={{ fontSize: "11.5px", fontVariantNumeric: "tabular-nums", color: "rgba(255,244,236,.45)" }}>{fmt(q.dur)}</span>
+                    </div>
+                  );
+                })
+              )}
+            </div>
           </div>
-        )}
-      </div>
+        </>
+      )}
     </div>
   );
 }

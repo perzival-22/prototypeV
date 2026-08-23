@@ -16,14 +16,15 @@ export async function fetchWebApi(endpoint: string, method: string, body?: any, 
   // Surface real failures instead of returning Spotify's error body as if it
   // were data. A common one: 403 on me/player/* for non-Premium accounts.
   if (!res.ok) {
-    let detail = "";
+    const raw = await res.text();
+    let detail = raw ? raw.slice(0, 300) : "";
     try {
-      const err = await res.json();
-      detail = err?.error?.message ? `: ${err.error.message}` : "";
+      const err = JSON.parse(raw);
+      if (err?.error?.message) detail = err.error.message;
     } catch {
       /* body was not JSON */
     }
-    throw new Error(`Spotify API ${res.status}${detail}`);
+    throw new Error(`Spotify API ${res.status}${detail ? `: ${detail}` : ""}`);
   }
 
   return await res.json();
