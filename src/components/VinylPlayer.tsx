@@ -67,11 +67,20 @@ export default function VinylPlayer({ accent = "#ff3d6e" }) {
 
         try {
           const pl = await getUserPlaylists(token);
-          if (pl && pl.items && pl.items.length > 0) {
-            setPlaylistName(pl.items[0].name);
-            const trksData = await getPlaylistTracks(pl.items[0].id, token);
-            if (trksData && trksData.items) {
-              const mappedTracks = trksData.items
+          const items = (pl?.items ?? []).filter((p: any) => p && p.id);
+          // Spotify-owned / algorithmic playlists (Discover Weekly, Daily Mix,
+          // editorial lists) now 403 on the tracks endpoint for dev-mode apps,
+          // so prefer the user's own playlists and fall through on failure
+          // instead of blindly trusting items[0].
+          const ordered = [
+            ...items.filter((p: any) => p.owner?.id && p.owner.id !== "spotify"),
+            ...items.filter((p: any) => p.owner?.id === "spotify"),
+          ];
+
+          for (const p of ordered) {
+            try {
+              const trksData = await getPlaylistTracks(p.id, token);
+              const mappedTracks = (trksData?.items ?? [])
                 .filter((item: any) => item.track)
                 .map((item: any) => ({
                   id: item.track.id,
@@ -84,7 +93,13 @@ export default function VinylPlayer({ accent = "#ff3d6e" }) {
                   cover: item.track.album.images[0] ? `url(${item.track.album.images[0].url})` : "linear-gradient(140deg,#ff9d3c 0%,#ff3d6e 45%,#7b1a5c 100%)",
                   rawCover: item.track.album.images[0] ? item.track.album.images[0].url : ""
                 }));
-              if (mappedTracks.length > 0) setTracks(mappedTracks);
+              if (mappedTracks.length > 0) {
+                setPlaylistName(p.name);
+                setTracks(mappedTracks);
+                break; // Loaded a readable playlist - stop looking.
+              }
+            } catch (e) {
+              console.warn(`Skipping unreadable playlist "${p.name}"`, e);
             }
           }
         } catch (e) {
